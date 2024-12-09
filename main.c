@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -26,38 +27,58 @@ void displayPrompt(int status, int isSignal, long execTime) {
 }
 
 // Function to split input into command and arguments
-void parseCommand(char *input, char **args) {
+int parseCommand(char *input, char **args, char **inputFile, char **outputFile) {
     char *token;
     int index = 0;
 
-    // Token the input string by spaces
+    *inputFile = NULL;
+    *outputFile = NULL;
+
     token = strtok(input, " ");
     while (token != NULL) {
-        args[index++] = token;
+        if (strcmp(token, "<") == 0) { // Input redirection
+            token = strtok(NULL, " ");
+            if (token == NULL) {
+                return -1; // Error: Missing file after '<'
+            }
+            *inputFile = token;
+        } else if (strcmp(token, ">") == 0) { // Output redirection
+            token = strtok(NULL, " ");
+            if (token == NULL) {
+                return -1; // Error: Missing file after '>'
+            }
+            *outputFile = token;
+        } else {
+            args[index++] = token; // Normal arguments
+        }
         token = strtok(NULL, " ");
     }
 
     args[index] = NULL; // NULL-terminate the array
+    return 0;
 }
 
 int main() {
     displayWelcomeMessage();
 
-    int lastStatus = 0; // Last command's status
-    int isSignal = 0;   // Flag for signal (1) or exit (0)
+    int lastStatus = 0;    // Last command's status
+    int isSignal = 0;      // Flag for signal (1) or exit (0)
     long execTime = 0;     // Execution time in milliseconds
 
     while (1) {
-        displayPrompt(lastStatus, isSignal, execTime );
+        displayPrompt(lastStatus, isSignal, execTime);
 
         char command[MAX_CMD_LENGTH];
-        char *args[MAX_CMD_LENGTH / 2 + 1]; // Array to hold command and arguments
+        char *args[MAX_CMD_LENGTH / 2 + 1]; // Array for command and arguments
+        char *inputFile = NULL;            // File for input redirection
+        char *outputFile = NULL;           // File for output redirection
+
         if (read(STDIN_FILENO, command, sizeof(command)) <= 0) {
-            write(STDOUT_FILENO, "\n", 1);  // Handle Ctrl+D (EOF)
+            write(STDOUT_FILENO, "\n", 1); // Handle EOF (Ctrl+D)
             break;
         }
 
-        command[strcspn(command, "\n")] = '\0';  // Remove newline character
+        command[strcspn(command, "\n")] = '\0'; // Remove newline character
 
         if (strcmp(command, "exit") == 0) {
             write(STDOUT_FILENO, "Bye bye...\n", strlen("Bye bye...\n"));
@@ -65,11 +86,14 @@ int main() {
         }
 
         if (strlen(command) == 0) {
-            continue;  // Ignore empty input
+            continue; // Ignore empty input
         }
 
-        // Parse the command into args array
-        parseCommand(command, args);
+        // Parse the command and detect redirections
+        if (parseCommand(command, args, &inputFile, &outputFile) < 0) {
+            write(STDOUT_FILENO, "Error: Invalid redirection syntax\n", 34);
+            continue;
+        }
 
         // Measure time
         struct timespec startTime, endTime;
@@ -80,15 +104,34 @@ int main() {
             perror("Error during fork");
             continue;
         } else if (pid == 0) {
-            // Child process: Execute the command
-            execvp(args[0], args);  // Execute command with arguments
+            // Child process: Handle redirections
+            if (inputFile != NULL) {
+                int inFd = open(inputFile, O_RDONLY);
+                if (inFd < 0) {
+                    perror("Error opening input file");
+                    exit(EXIT_FAILURE);
+                }
+                dup2(inFd, STDIN_FILENO); // Redirect stdin
+                close(inFd);
+            }
+
+            if (outputFile != NULL) {
+                int outFd = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (outFd < 0) {
+                    perror("Error opening output file");
+                    exit(EXIT_FAILURE);
+                }
+                dup2(outFd, STDOUT_FILENO); // Redirect stdout
+                close(outFd);
+            }
+
+            execvp(args[0], args); // Execute the command
             perror("Error executing command"); // Only reached if execvp fails
             exit(EXIT_FAILURE);
         } else {
             // Parent process: Wait for the child to finish
             int status;
             waitpid(pid, &status, 0);
-            
 
             clock_gettime(CLOCK_MONOTONIC, &endTime); // End time
 
