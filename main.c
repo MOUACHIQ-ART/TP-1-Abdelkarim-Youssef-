@@ -116,7 +116,7 @@ int main() {
             }
 
             if (outputFile != NULL) {
-                int outFd = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                int outFd = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC );
                 if (outFd < 0) {
                     perror("Error opening output file");
                     exit(EXIT_FAILURE);
